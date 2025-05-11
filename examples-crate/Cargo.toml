@@ -9,7 +9,7 @@ obj-exporter = "0.2"
 rayon = "1.8"
 rand = "0.8"
 
-ilattice = { git = "https://github.com/bonsairobo/ilattice-rs", branch = "main", default-features = false, features = ["glam"]}
+ilattice = {version = "0.4.0", default-features = false, features = ["glam"]}
 
 [dependencies.fast-surface-nets]
 path = ".."

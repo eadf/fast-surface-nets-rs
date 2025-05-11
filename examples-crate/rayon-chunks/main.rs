@@ -1,6 +1,6 @@
-use fast_surface_nets::glam::Vec3A;
 use fast_surface_nets::ndshape::{ConstShape, ConstShape3u32};
 use fast_surface_nets::{surface_nets, SurfaceNetsBuffer};
+use ilattice::glam::{IVec3,Vec3A};
 use ilattice::prelude::*;
 use rand::{Rng, rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
