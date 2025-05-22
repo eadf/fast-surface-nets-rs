@@ -245,8 +245,7 @@ fn generate_chunks() -> Vec<(Vec3A, SurfaceNetsBuffer)> {
 
     let unpadded_chunk_shape = IVec3::from([UNPADDED_CHUNK_SIDE as i32; 3]);
     let chunks: Vec<_> = chunks_extent
-        .iter3()
-        .par_bridge()
+        .par_iter3()
         .filter_map(|p| {
             let chunk_min = p * unpadded_chunk_shape;
 
