@@ -48,6 +48,7 @@
 pub use glam;
 pub use ndshape;
 
+use crate::normal_mode::NormalModeKernel;
 use glam::{Vec3A, Vec3Swizzles};
 use ndshape::Shape;
 
@@ -71,7 +72,10 @@ pub struct SurfaceNetsBuffer {
     pub positions: Vec<[f32; 3]>,
     /// The triangle mesh normals.
     ///
-    /// The normals are **not** normalized, since that is done most efficiently on the GPU.
+    /// Note: The contents of the `normals` field depends on the normal mode:
+    /// - [`NoNormals`]: The normals vector will be empty
+    /// - [`RawNormals`]: Contains unnormalized normal vectors
+    /// - [`NormalizedNormals`]: Contains unit-length normal vectors
     pub normals: Vec<[f32; 3]>,
     /// The triangle mesh indices.
     pub indices: Vec<u32>,
@@ -123,6 +127,7 @@ pub const NULL_VERTEX: u32 = u32::MAX;
 ///
 /// Note that the scheme illustrated above implies that chunks must be padded with a 1-voxel border copied from neighboring
 /// voxels in order to connect seamlessly.
+#[inline(always)]
 pub fn surface_nets<T, S>(
     sdf: &[T],
     shape: &S,
@@ -133,6 +138,80 @@ pub fn surface_nets<T, S>(
     T: SignedDistance,
     S: Shape<3, Coord = u32>,
 {
+    // by default: calculate normals, but do not normalize them.
+    surface_nets_with_config::<RawNormals, T, S>(sdf, shape, min, max, output)
+}
+
+pub trait NormalMode: NormalModeKernel {}
+
+// mod must be private
+mod normal_mode {
+    use crate::NormalMode;
+    // create a sealed trait
+    pub trait NormalModeKernel {
+        const NORMAL_MODE: u8;
+    }
+    impl NormalModeKernel for crate::NoNormals {
+        const NORMAL_MODE: u8 = 0;
+    }
+    impl NormalModeKernel for crate::NormalizedNormals {
+        const NORMAL_MODE: u8 = 1;
+    }
+    impl NormalModeKernel for crate::RawNormals {
+        const NORMAL_MODE: u8 = 2;
+    }
+    impl<T: NormalModeKernel> NormalMode for T {}
+}
+
+/// Generate no normals inside the [`SurfaceNetsBuffer`]
+pub struct NoNormals;
+/// Generate non-normalized normals inside the [`SurfaceNetsBuffer`]
+pub struct RawNormals;
+/// Generate normalized normals inside the [`SurfaceNetsBuffer`]
+pub struct NormalizedNormals;
+
+/// The Naive Surface Nets smooth voxel meshing algorithm with compile time configuration.
+///
+/// Extracts an isosurface mesh from the [signed distance field](https://en.wikipedia.org/wiki/Signed_distance_function) `sdf`.
+/// Each value in the field determines how close that point is to the isosurface. Negative values are considered "interior" of
+/// the surface volume, and positive values are considered "exterior." These lattice points will be considered corners of unit
+/// cubes. For each unit cube, at most one isosurface vertex will be estimated, as below, where `p` is a positive corner value,
+/// `n` is a negative corner value, `s` is an isosurface vertex, and `|` or `-` are mesh polygons connecting the vertices.
+///
+/// ```text
+/// p   p   p   p
+///   s---s
+/// p | n | p   p
+///   s   s---s
+/// p | n   n | p
+///   s---s---s
+/// p   p   p   p
+/// ```
+///
+/// The set of corners sampled is exactly the set of points in `[min, max]`. `sdf` must contain all of those points.
+///
+/// Note that the scheme illustrated above implies that chunks must be padded with a 1-voxel border copied from neighboring
+/// voxels in order to connect seamlessly.
+///
+/// # Type parameters:
+/// Use [`NoNormals`], [`NormalizedNormals`] or [`RawNormals`] for compile-time definition of the normalization behaviour.
+///
+/// Choose based on your use case:
+/// - Use [`NoNormals`] if you calculate normals elsewhere or don't need them
+/// - Use [`RawNormals`] if you later will normalize the normals with the GPU (default behavior)
+/// - Use [`NormalizedNormals`] for direct rendering without post-processing (note that the normalization will be
+///   done by the CPU)
+pub fn surface_nets_with_config<N, T, S>(
+    sdf: &[T],
+    shape: &S,
+    min: [u32; 3],
+    max: [u32; 3],
+    output: &mut SurfaceNetsBuffer,
+) where
+    N: NormalMode,
+    T: SignedDistance,
+    S: Shape<3, Coord = u32>,
+{
     // SAFETY
     // Make sure the slice matches the shape before we start using get_unchecked.
     assert!(shape.linearize(min) <= shape.linearize(max));
@@ -140,19 +219,20 @@ pub fn surface_nets<T, S>(
 
     output.reset(sdf.len());
 
-    estimate_surface(sdf, shape, min, max, output);
+    estimate_surface::<N, T, S>(sdf, shape, min, max, output);
     make_all_quads(sdf, shape, min, max, output);
 }
 
 // Find all vertex positions and normals. Also generate a map from grid position to vertex index to be used to look up vertices
 // when generating quads.
-fn estimate_surface<T, S>(
+fn estimate_surface<N, T, S>(
     sdf: &[T],
     shape: &S,
     [minx, miny, minz]: [u32; 3],
     [maxx, maxy, maxz]: [u32; 3],
     output: &mut SurfaceNetsBuffer,
 ) where
+    N: NormalMode,
     T: SignedDistance,
     S: Shape<3, Coord = u32>,
 {
@@ -161,7 +241,7 @@ fn estimate_surface<T, S>(
             for x in minx..maxx {
                 let stride = shape.linearize([x, y, z]);
                 let p = Vec3A::from([x as f32, y as f32, z as f32]);
-                if estimate_surface_in_cube(sdf, shape, p, stride, output) {
+                if estimate_surface_in_cube::<N, T, S>(sdf, shape, p, stride, output) {
                     output.stride_to_index[stride as usize] = output.positions.len() as u32 - 1;
                     output.surface_points.push([x, y, z]);
                     output.surface_strides.push(stride);
@@ -178,7 +258,7 @@ fn estimate_surface<T, S>(
 //
 // This is done by estimating, for each cube edge, where the isosurface crosses the edge (if it does at all). Then the estimated
 // surface point is the average of these edge crossings.
-fn estimate_surface_in_cube<T, S>(
+fn estimate_surface_in_cube<N, T, S>(
     sdf: &[T],
     shape: &S,
     p: Vec3A,
@@ -186,6 +266,7 @@ fn estimate_surface_in_cube<T, S>(
     output: &mut SurfaceNetsBuffer,
 ) -> bool
 where
+    N: NormalModeKernel,
     T: SignedDistance,
     S: Shape<3, Coord = u32>,
 {
@@ -209,8 +290,13 @@ where
     let c = centroid_of_edge_intersections(&corner_dists);
 
     output.positions.push((p + c).into());
-    output.normals.push(sdf_gradient(&corner_dists, c).into());
-
+    match N::NORMAL_MODE {
+        NoNormals::NORMAL_MODE => (),
+        NormalizedNormals::NORMAL_MODE => output
+            .normals
+            .push(sdf_gradient(&corner_dists, c).normalize().into()),
+        _ => output.normals.push(sdf_gradient(&corner_dists, c).into()),
+    }
     true
 }
 

@@ -16,7 +16,7 @@ fn bench_empty_space(c: &mut Criterion) {
     let num_triangles = buffer.indices.len() / 3;
 
     group.bench_with_input(
-        BenchmarkId::from_parameter(format!("tris={}", num_triangles)),
+        BenchmarkId::from_parameter(format!("tris={num_triangles}")),
         &(),
         |b, _| {
             b.iter(|| surface_nets(&samples, &SampleShape {}, [0; 3], [17; 3], &mut buffer));
@@ -39,7 +39,7 @@ fn bench_sine_sdf(c: &mut Criterion) {
     let num_triangles = buffer.indices.len() / 3;
 
     group.bench_with_input(
-        BenchmarkId::from_parameter(format!("tris={}", num_triangles)),
+        BenchmarkId::from_parameter(format!("tris={num_triangles}")),
         &(),
         |b, _| {
             b.iter(|| surface_nets(&samples, &SampleShape {}, [0; 3], [17; 3], &mut buffer));
@@ -62,7 +62,7 @@ fn bench_sphere(c: &mut Criterion) {
     let num_triangles = buffer.indices.len() / 3;
 
     group.bench_with_input(
-        BenchmarkId::from_parameter(format!("tris={}", num_triangles)),
+        BenchmarkId::from_parameter(format!("tris={num_triangles}")),
         &(),
         |b, _| {
             b.iter(|| surface_nets(&samples, &SampleShape {}, [0; 3], [17; 3], &mut buffer));
