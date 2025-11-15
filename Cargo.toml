@@ -13,3 +13,5 @@ ndshape = "0.3"
 
 [features]
 eval-max-plane = []
+glam-core-simd  = ["glam/core-simd"]
+glam-fast-math = ["glam/fast-math"]
